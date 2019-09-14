@@ -1,0 +1,14 @@
+[Unit]
+Description=colorui server
+After=network.target
+Requires=network.target
+
+[Service]
+User=vincent
+Group=vincent
+WorkingDirectory=/home/vincent/colorui.rs
+ExecStart=/home/vincent/colorui.rs/run.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
