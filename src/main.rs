@@ -27,6 +27,17 @@ pub enum SendError {
     IoError(std::io::Error),
 }
 
+fn f2u8(x: f32) -> u8 {
+    let x = x * 255.0;
+    if x < 0.0 {
+        0
+    } else if x > 255.0 {
+        255
+    } else {
+        x as u8
+    }
+}
+
 impl State {
     fn new() -> Self {
         Self { port: None }
@@ -93,6 +104,32 @@ impl State {
         )
     }
 
+    fn send_command(&mut self, command: serde_json::Value) -> Result<(), SendError> {
+        // Forward request to serial port
+        self.port()
+            .map_err(|error| SendError::SerialError(error))
+            .and_then(|port| {
+                info!("sending command: {:?}", command);
+
+                // We have an open port
+                serde_json::to_writer(port, &command).map_err(|error| {
+                    if error.is_io() {
+                        return SendError::IoError(error.into());
+                    }
+
+                    SendError::JsonError(error)
+                })
+            })
+            .map_err(|error| {
+                if let SendError::IoError(_io) = &error {
+                    // Drop serial port, it failed
+                    self.port = None
+                }
+
+                error
+            })
+    }
+
     fn send(&mut self, req: CURequest) -> Result<(), SendError> {
         match req {
             CURequest::Led { led, r, g, b } => {
@@ -106,35 +143,30 @@ impl State {
                 let (r, g, b, w) = Self::hsv_to_rgbw(rgb.into());
 
                 // Forward request to serial port
-                self.port()
-                    .map_err(|error| SendError::SerialError(error))
-                    .and_then(|port| {
-                        let msg = json!({
-                            "led": led,
-                            "r": r,
-                            "g": g,
-                            "b": b,
-                            "w": w,
-                        });
-                        info!("sending command: {:?}", msg);
+                let msg = json!({
+                    "led": led,
+                    "r": r,
+                    "g": g,
+                    "b": b,
+                    "w": w,
+                });
 
-                        // We have an open port
-                        serde_json::to_writer(port, &msg).map_err(|error| {
-                            if error.is_io() {
-                                return SendError::IoError(error.into());
-                            }
+                self.send_command(msg)
+            }
+            CURequest::Leds { leds } => {
+                for (i, rgbw) in leds.iter().enumerate() {
+                    let msg = json!({
+                        "led": 1 << i,
+                        "r": f2u8(rgbw.r),
+                        "g": f2u8(rgbw.g),
+                        "b": f2u8(rgbw.b),
+                        "w": f2u8(rgbw.w),
+                    });
 
-                            SendError::JsonError(error)
-                        })
-                    })
-                    .map_err(|error| {
-                        if let SendError::IoError(_io) = &error {
-                            // Drop serial port, it failed
-                            self.port = None
-                        }
+                    self.send_command(msg)?;
+                }
 
-                        error
-                    })
+                Ok(())
             }
         }
     }
@@ -175,10 +207,19 @@ impl Actor for WebSocketSession {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Rgbw {
+    r: f32,
+    g: f32,
+    b: f32,
+    w: f32,
+}
+
 #[derive(Debug, Deserialize)]
-#[serde(tag = "method", rename_all = "snake_case")]
+#[serde(untagged, rename_all = "snake_case")]
 pub enum CURequest {
     Led { led: u8, r: u8, g: u8, b: u8 },
+    Leds { leds: Vec<Rgbw> },
 }
 
 #[derive(Debug, Serialize)]

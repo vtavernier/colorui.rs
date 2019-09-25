@@ -61,7 +61,6 @@ export default {
       localStorage.data = JSON.stringify({ leds: this.leds })
 
       this.$socket.sendObj({
-        method: 'led',
         led: 1 << id,
         ...rgbStruct(this.leds[id].color)
       })
